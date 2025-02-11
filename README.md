@@ -1,5 +1,5 @@
 # inzynierka
-Install numpy, matplotlib and pandas (dunno if anythng else)
+please run pip install -r /requirements.txt
 
 Just run py.exe main.py to generate everything.
 
