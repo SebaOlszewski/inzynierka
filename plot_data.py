@@ -17,7 +17,7 @@ def plot_solve_data(csv_file):
     plt.xlabel('Solve ID')
     plt.ylabel('Moves')
     plt.title('LBL Solve Moves per Solve')
-    plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    plt.legend(loc='lower left')
     plt.savefig(os.path.join(results_folder, "LBL_Moves.png"))
     plt.close()
     
@@ -27,7 +27,7 @@ def plot_solve_data(csv_file):
     plt.xlabel('Solve ID')
     plt.ylabel('Moves')
     plt.title('Blind Solve Moves per Solve')
-    plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    plt.legend(loc='lower left')
     plt.savefig(os.path.join(results_folder, "Blind_Moves.png"))
     plt.close()
     
@@ -37,7 +37,7 @@ def plot_solve_data(csv_file):
     plt.xlabel('Solve ID')
     plt.ylabel('Moves')
     plt.title('CFOP Solve Moves per Solve')
-    plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    plt.legend(loc='lower left')
     plt.savefig(os.path.join(results_folder, "CFOP_Moves.png"))
     plt.close()
     
@@ -53,13 +53,62 @@ def plot_solve_data(csv_file):
     plt.ylabel('Time (ms)')
     plt.title('Solve Time per Algorithm')
     plt.ylim(0)
-    plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    plt.legend(loc='lower left')
     plt.savefig(os.path.join(results_folder, "Solve_Times.png"))
     plt.close()
-
     
+    # Combined CPU Usage Graph
+    plt.figure(figsize=(15, 5))
+    plt.plot(df['Index'], df['LBL CPU Usage'], label='LBL CPU Usage (%)', color='green')
+    plt.plot(df['Index'], df['CFOP CPU Usage'], label='CFOP CPU Usage (%)', color='red')
+    plt.plot(df['Index'], df['Blind CPU Usage'], label='Blind CPU Usage (%)', color='blue')
+    plt.xlabel('Solve ID')
+    plt.ylabel('CPU Usage (%)')
+    plt.title('CPU Usage per Algorithm')
+    plt.legend(loc='lower left')
+    plt.savefig(os.path.join(results_folder, "CPU_Usage.png"))
+    plt.close()
+    
+    # Memory Usage Graphs
+    plt.figure(figsize=(15, 5))
+    plt.plot(df['Index'], df['LBL Memory Used (MB)'], label='LBL Memory Used (MB)', color='lime')
+    plt.xlabel('Solve ID')
+    plt.ylabel('Memory Used (MB)')
+    plt.title('LBL Memory Usage')
+    plt.legend(loc='lower left')
+    plt.savefig(os.path.join(results_folder, "LBL_Memory_Usage.png"))
+    plt.close()
+    
+    plt.figure(figsize=(15, 5))
+    plt.plot(df['Index'], df['CFOP Memory Used (MB)'], label='CFOP Memory Used (MB)', color='salmon')
+    plt.xlabel('Solve ID')
+    plt.ylabel('Memory Used (MB)')
+    plt.title('CFOP Memory Usage')
+    plt.legend(loc='lower left')
+    plt.savefig(os.path.join(results_folder, "CFOP_Memory_Usage.png"))
+    plt.close()
+    
+    plt.figure(figsize=(15, 5))
+    plt.plot(df['Index'], df['Blind Memory Used (MB)'], label='Blind Memory Used (MB)', color='cyan')
+    plt.xlabel('Solve ID')
+    plt.ylabel('Memory Used (MB)')
+    plt.title('Blind Memory Usage')
+    plt.legend(loc='lower left')
+    plt.savefig(os.path.join(results_folder, "Blind_Memory_Usage.png"))
+    plt.close()
+    
+    # Combined Memory Usage Graph
+    plt.figure(figsize=(15, 5))
+    plt.plot(df['Index'], df['LBL Memory Used (MB)'], label='LBL Memory Used (MB)', color='lime')
+    plt.plot(df['Index'], df['CFOP Memory Used (MB)'], label='CFOP Memory Used (MB)', color='salmon')
+    plt.plot(df['Index'], df['Blind Memory Used (MB)'], label='Blind Memory Used (MB)', color='cyan')
+    plt.xlabel('Solve ID')
+    plt.ylabel('Memory Used (MB)')
+    plt.title('Memory Usage per Algorithm')
+    plt.legend(loc='lower left')
+    plt.savefig(os.path.join(results_folder, "Combined_Memory_Usage.png"))
+    plt.close()
 
 
 
-# Example usage
 plot_solve_data("solve_data.csv")
