@@ -1,6 +1,6 @@
 import random
 import numpy as np
-import moves
+import legacy_matrix.moves as moves
 
 
 def T_perm(blind_grid, move_list):

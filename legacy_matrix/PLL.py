@@ -1,6 +1,6 @@
 import random
 import numpy as np
-import moves
+import legacy_matrix.moves as moves
 
 def matches_pattern(curr_str, pattern):
     return curr_str == pattern

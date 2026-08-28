@@ -1,6 +1,6 @@
 import random
 import numpy as np
-import moves
+import legacy_matrix.moves as moves
 
 def checkers(grid_pattern):
     grid_pattern = moves.move(grid_pattern, "C")

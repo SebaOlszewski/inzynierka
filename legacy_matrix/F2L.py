@@ -1,7 +1,7 @@
 import numpy as np
-import moves
+import legacy_matrix.moves as moves
 import algs
-import LBL
+import legacy_matrix.LBL as LBL
 
 def solve_2_layers(grid_pattern, move_list):
     move_list = LBL.solve_cross(grid_pattern, move_list)

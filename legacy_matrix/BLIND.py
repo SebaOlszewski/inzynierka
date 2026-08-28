@@ -1,7 +1,7 @@
 import random
 import numpy as np
-import moves
-import BLIND_moves
+import legacy_matrix.moves as moves
+import legacy_matrix.BLIND_moves as BLIND_moves
 
 
 def solve_blind(blind_grid, move_list):
