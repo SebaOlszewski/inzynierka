@@ -170,3 +170,9 @@ class BitCube:
             grid[r3][col3] = cols[2]
             
         return grid
+
+    def __deepcopy__(self, memo):
+        new_cube = BitCube.__new__(BitCube)
+        new_cube.corners = self.corners
+        new_cube.edges = self.edges
+        return new_cube
