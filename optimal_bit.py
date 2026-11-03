@@ -1,4 +1,5 @@
 # optimal_bit.py
+import gc
 from collections import deque
 from cube_bitboard import BitCube
 
@@ -71,7 +72,6 @@ def _apply_on_raw_state(edges, corners, move_str):
 # WSPÓŁRZĘDNE BITOWE DLA DRZEWA WSTECZNEGO (OD UŁOŻONEJ KOSTKI)
 # =========================================================================
 def _get_p1_subkeys(edges, corners):
-    """Zwraca podklucze Fazy 1: (eo_slice, co_slice, full_g1_key)."""
     eo = 0
     slice_mask = 0
     for s in range(12):
@@ -93,8 +93,7 @@ def _get_p1_subkeys(edges, corners):
 
 
 def _get_p2_subkeys(edges, corners):
-    """Zwraca podklucze Fazy 2: (corners_perm_slice, ud_edges_perm)."""
-    e_slice = (edges >> 20) & 0xFFFFF  # Sloty 4..7 (krawędzie środkowe)
+    e_slice = (edges >> 20) & 0xFFFFF  
     c_key = (corners << 20) | e_slice
     ud_edges = (edges & 0xFFFFF) | ((edges >> 20) & ~0xFFFFF)
     return c_key, ud_edges
@@ -105,22 +104,35 @@ SOLVED_STATE = (SOLVED_CUBE.edges, SOLVED_CUBE.corners)
 SOLVED_EO_SLICE, SOLVED_CO_SLICE, SOLVED_G1_KEY = _get_p1_subkeys(SOLVED_CUBE.edges, SOLVED_CUBE.corners)
 SOLVED_P2_C, SOLVED_P2_E = _get_p2_subkeys(SOLVED_CUBE.edges, SOLVED_CUBE.corners)
 
-# Tablice drzew wstecznych od ułożonej kostki (Meet-in-the-Middle)
-G1_BACKWARD_TABLE = {SOLVED_G1_KEY: []}
-PHASE2_BACKWARD_TABLE = {SOLVED_STATE: []}
-BWD_EO_DIST = {SOLVED_EO_SLICE: 0}
-BWD_CO_DIST = {SOLVED_CO_SLICE: 0}
-BWD_P2_C_DIST = {SOLVED_P2_C: 0}
-BWD_P2_E_DIST = {SOLVED_P2_E: 0}
+# Tablice inicjowane jako puste na starcie programu
+G1_BACKWARD_TABLE = {}
+PHASE2_BACKWARD_TABLE = {}
+BWD_EO_DIST = {}
+BWD_CO_DIST = {}
+BWD_P2_C_DIST = {}
+BWD_P2_E_DIST = {}
 
 
 def _build_backward_trees():
-    # 1. Dokładne drzewo wsteczne (od ułożonej kostki) dla Fazy 1 (głębokość 4)
+    global G1_BACKWARD_TABLE, PHASE2_BACKWARD_TABLE, BWD_EO_DIST, BWD_CO_DIST, BWD_P2_C_DIST, BWD_P2_E_DIST
+    
+    # Jeśli tablica jest pełna, pomiń budowanie (zabezpieczenie na kolejne kostki)
+    if G1_BACKWARD_TABLE:
+        return
+
+    G1_BACKWARD_TABLE[SOLVED_G1_KEY] = []
+    PHASE2_BACKWARD_TABLE[SOLVED_STATE] = []
+    BWD_EO_DIST[SOLVED_EO_SLICE] = 0
+    BWD_CO_DIST[SOLVED_CO_SLICE] = 0
+    BWD_P2_C_DIST[SOLVED_P2_C] = 0
+    BWD_P2_E_DIST[SOLVED_P2_E] = 0
+
+    # 1. Dokładne drzewo wsteczne dla Fazy 1 (głębokość 6)
     q_g1 = deque([(SOLVED_CUBE.edges, SOLVED_CUBE.corners, [])])
     while q_g1:
         e, c, path = q_g1.popleft()
         d = len(path)
-        if d >= 4:
+        if d >= 6:
             continue
         last_m = path[-1] if path else None
         for m in ALL_MOVES:
@@ -137,14 +149,12 @@ def _build_backward_trees():
             if co_s not in BWD_CO_DIST:
                 BWD_CO_DIST[co_s] = d + 1
 
-    # Rozszerzenie pomocniczych drzew wstecznych orientacji do głębokości 6
-    q_sub = deque([(st_e, st_c, len(p)) for st_e, st_c, p in []])
-    # Szybki BFS po samych podkluczach od warstwy 4 do 6
+    # Rozszerzenie pomocniczych drzew wstecznych orientacji do głębokości 7
     q_eo = deque([(SOLVED_CUBE.edges, SOLVED_CUBE.corners, 0)])
     visited_eo = {SOLVED_EO_SLICE}
     while q_eo:
         e, c, d = q_eo.popleft()
-        if d >= 6:
+        if d >= 7:
             continue
         for m in ALL_MOVES:
             ne, nc = _apply_on_raw_state(e, c, m)
@@ -158,7 +168,7 @@ def _build_backward_trees():
     visited_co = {SOLVED_CO_SLICE}
     while q_co:
         e, c, d = q_co.popleft()
-        if d >= 6:
+        if d >= 7:
             continue
         for m in ALL_MOVES:
             ne, nc = _apply_on_raw_state(e, c, m)
@@ -168,12 +178,12 @@ def _build_backward_trees():
                 BWD_CO_DIST[co_s] = d + 1
                 q_co.append((ne, nc, d + 1))
 
-    # 2. Drzewo wsteczne od ułożonej kostki dla Fazy 2 (głębokość 6 w G1)
+    # 2. Drzewo wsteczne dla Fazy 2 (głębokość 8)
     q_p2 = deque([(SOLVED_CUBE.edges, SOLVED_CUBE.corners, [])])
     while q_p2:
         e, c, path = q_p2.popleft()
         d = len(path)
-        if d >= 6:
+        if d >= 8:
             continue
         last_m = path[-1] if path else None
         for m in G1_MOVES:
@@ -192,7 +202,15 @@ def _build_backward_trees():
                 BWD_P2_E_DIST[ek] = d + 1
 
 
-_build_backward_trees()
+def free_tables():
+    """Zwalnia całą zarezerwowaną pamięć i wymusza usunięcie jej z RAM-u systemu."""
+    G1_BACKWARD_TABLE.clear()
+    PHASE2_BACKWARD_TABLE.clear()
+    BWD_EO_DIST.clear()
+    BWD_CO_DIST.clear()
+    BWD_P2_C_DIST.clear()
+    BWD_P2_E_DIST.clear()
+    gc.collect()
 
 
 # =========================================================================
@@ -208,7 +226,6 @@ def _search_p1_meet(e, c, depth_left, last_m, path):
     if depth_left == 0:
         return None
 
-    # Dolne oszacowanie odległości do drzewa wstecznego
     h = max(BWD_EO_DIST.get(eo_s, 7), BWD_CO_DIST.get(co_s, 7))
     if h > depth_left:
         return None
@@ -250,7 +267,9 @@ def _search_p2_meet(e, c, depth_left, last_m, path):
 
 class BidirectionalOptimalSolver:
     def solve(self, cube, log):
-        # 1. Szukanie spotkania pośrodku w Fazie 1 (Pomieszana <-> G1_BACKWARD_TABLE)
+        # Dynamicznie ładuje tablice tylko przy wejściu do układania
+        _build_backward_trees()
+
         p1_moves = None
         for limit in range(13):
             p1_moves = _search_p1_meet(cube.edges, cube.corners, limit, None, [])
@@ -264,7 +283,6 @@ class BidirectionalOptimalSolver:
         for m in p1_moves:
             e_mid, c_mid = _apply_on_raw_state(e_mid, c_mid, m)
 
-        # 2. Szukanie spotkania pośrodku w Fazie 2 (Stan G1 <-> PHASE2_BACKWARD_TABLE od ułożonej)
         p2_moves = None
         for limit in range(19):
             p2_moves = _search_p2_meet(e_mid, c_mid, limit, None, [])

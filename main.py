@@ -4,7 +4,10 @@ import random
 import sys
 import time
 import tracemalloc
+import os
+from concurrent.futures import ProcessPoolExecutor
 import matplotlib.pyplot as plt
+from datetime import datetime
 from cube_bitboard import BitCube
 import lbl_bit
 import cfop_bit
@@ -14,13 +17,13 @@ import optimal_bit
 SCRAMBLES_FILE = "scrambles.txt"
 CSV_OUTPUT_FILE = "solve_data.csv"
 
-CSV_HEADER = [
-    "Index",
-    "LBL Time (ms)", "LBL Moves", "LBL CPU Usage", "LBL Memory Used (MB)",
-    "Blind Time (ms)", "Blind Moves", "Blind CPU Usage", "Blind Memory Used (MB)",
-    "CFOP Time (ms)", "CFOP Moves", "CFOP CPU Usage", "CFOP Memory Used (MB)",
-    "Optimal Time (ms)", "Optimal Moves", "Optimal CPU Usage", "Optimal Memory Used (MB)"
-]
+# Zaktualizowane nagłówki dla 4 przebiegów (Single-Core i Multi-Core)
+CSV_HEADER = ["Index"]
+for prefix in ["LBL", "Blind", "CFOP", "Optimal"]:
+    CSV_HEADER.extend([
+        f"{prefix} SC Time (ms)", f"{prefix} SC Moves", f"{prefix} SC CPU Usage", f"{prefix} SC Mem (MB)",
+        f"{prefix} MC Time (ms)", f"{prefix} MC Moves", f"{prefix} MC CPU Usage", f"{prefix} MC Mem (MB)"
+    ])
 
 FACE_COLORS = {
     'W': '#FFFFFF',
@@ -33,7 +36,6 @@ FACE_COLORS = {
 
 
 def print_progress_bar(mode, current, total, elapsed_s, bar_length=24):
-    """Nadpisuje bieżący wiersz w terminalu paskiem postępu (np. 1/10 -> 2/10)."""
     ratio = current / total if total > 0 else 1.0
     filled = int(bar_length * ratio)
     bar = "█" * filled + "-" * (bar_length - filled)
@@ -61,10 +63,28 @@ def generate_random_scramble(length=20):
 
 
 def save_scrambles_to_file(count, filename=SCRAMBLES_FILE, length=20):
-    scrambles = [generate_random_scramble(length) for _ in range(count)]
+    scrambles = []
+    seen_states = set()
+    
+    while len(scrambles) < count:
+        scramble = generate_random_scramble(length)
+        
+        # Weryfikacja stanu kostki za pomocą tymczasowego obiektu
+        temp_cube = BitCube()
+        for move in parse_moves(scramble):
+            temp_cube.apply_move(move)
+            
+        # Zapisujemy fizyczny stan kostki, a nie tylko ciąg znaków (string)
+        state_key = (temp_cube.edges, temp_cube.corners)
+        
+        if state_key not in seen_states:
+            seen_states.add(state_key)
+            scrambles.append(scramble)
+            
     with open(filename, "w", encoding="utf-8") as file:
         for scrmbl in scrambles:
             file.write(scrmbl + "\n")
+            
     return scrambles
 
 
@@ -104,54 +124,121 @@ def is_cube_solved(cube):
     return cube.edges == solved_cube.edges and cube.corners == solved_cube.corners
 
 
-def _execute_solver(mode, cube):
-    """Wykonuje pełne ułożenie kostki dla wybranego trybu i zwraca liczbę ruchów."""
+def _execute_solver(mode, cube, is_debug=False):
     total_moves = 0
     if mode == "LBL":
         for step_id in range(1, 9):
-            solution, _ = lbl_bit.solve_step(cube, step_id)
-            total_moves += len(solution.split()) if solution else 0
+            if is_debug:
+                print(f"\n      -> [Krok {step_id}] Uruchamiam... ", end="", flush=True)
+            solution, name = lbl_bit.solve_step(cube, step_id)
+            step_moves = len(solution.split()) if solution else 0
+            total_moves += step_moves
+            if is_debug:
+                print(f"ZAKOŃCZONO ({name}) | ruchy: {step_moves} | wykonano: {solution or 'brak'}", end="", flush=True)
     elif mode == "CFOP":
         for step_id in range(1, 5):
-            solution, _ = cfop_bit.solve_step(cube, step_id)
-            total_moves += len(solution.split()) if solution else 0
+            if is_debug:
+                print(f"\n      -> [Krok {step_id}] Uruchamiam... ", end="", flush=True)
+            solution, name = cfop_bit.solve_step(cube, step_id)
+            step_moves = len(solution.split()) if solution else 0
+            total_moves += step_moves
+            if is_debug:
+                print(f"ZAKOŃCZONO ({name}) | ruchy: {step_moves} | wykonano: {solution or 'brak'}", end="", flush=True)
     elif mode == "BLIND":
+        if is_debug:
+            print(f"\n      -> [Całość] Uruchamiam... ", end="", flush=True)
         log = []
         solver_blind = blind_bit.OptimizedBlindSolver()
         solver_blind.solve(cube, log)
         total_moves = len(log)
+        if is_debug:
+            print(f"ZAKOŃCZONO | ruchy: {total_moves} | wykonano: {' '.join(log) or 'brak'}", end="", flush=True)
     elif mode == "OPTIMAL":
+        if is_debug:
+            print(f"\n      -> [Całość] Uruchamiam... ", end="", flush=True)
         log = []
         solver_opt = optimal_bit.BidirectionalOptimalSolver()
         solver_opt.solve(cube, log)
         total_moves = len(log)
+        if is_debug:
+            print(f"ZAKOŃCZONO | ruchy: {total_moves} | wykonano: {' '.join(log) or 'brak'}", end="", flush=True)
     else:
         raise ValueError(f"Nieznany solver: {mode}")
     return total_moves
 
 
 def _get_mode_trials(mode, total_trials):
-    """Dla OPTIMAL zwraca pierwsze 10% scrambli (minimum 1), dla pozostałych 100%."""
     if mode == "OPTIMAL":
         return max(1, total_trials // 10)
     return total_trials
 
 
+# =========================================================================
+# WORKERY DLA MULTIPROCESSINGU (Muszą być na poziomie modułu)
+# =========================================================================
+def _worker_pass3_cpu(args):
+    scramble, mode = args
+    cube = BitCube()
+    for m in parse_moves(scramble):
+        cube.apply_move(m)
+
+    cpu_t0 = time.process_time()
+    wall_t0 = time.perf_counter()
+    try:
+        moves_count = _execute_solver(mode, cube, is_debug=False)
+        wall_dt = time.perf_counter() - wall_t0
+        cpu_dt = time.process_time() - cpu_t0
+        solved = is_cube_solved(cube)
+    except Exception as err:
+        moves_count = 0
+        wall_dt = 0.0
+        cpu_dt = 0.0
+        solved = False
+
+    elapsed_ms = wall_dt * 1000.0
+    cpu_usage = min(100.0, (cpu_dt / wall_dt) * 100.0) if wall_dt > 0 else 0.0
+
+    return {
+        "solved": solved,
+        "time_ms": elapsed_ms,
+        "moves": moves_count,
+        "cpu_usage": cpu_usage
+    }
+
+
+def _worker_pass4_memory(args):
+    scramble, mode = args
+    cube = BitCube()
+    for m in parse_moves(scramble):
+        cube.apply_move(m)
+
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    try:
+        _execute_solver(mode, cube, is_debug=False)
+    except Exception:
+        pass
+    _, peak_bytes = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    return {
+        "memory_mb": peak_bytes / (1024.0 * 1024.0)
+    }
+
+
+# =========================================================================
+# PRZEBIEGI 1 i 2: SINGLE-CORE
+# =========================================================================
 def run_pass1_time_moves_cpu(scrambles, modes):
-    """
-    PRZEBIEG 1: Czysty pomiar czasu wykonania (ms), liczby ruchów oraz CPU Usage (%)
-    z paskiem postępu aktualizowanym pomiędzy pomiarami.
-    """
     total_trials = len(scrambles)
     pass1_results = {m: [] for m in modes}
 
-    print("\n[PRZEBIEG 1/2] Pomiar CZASU, RUCHÓW i CPU...")
+    print("\n[PRZEBIEG 1/4] SC Pomiar CZASU, RUCHÓW i CPU (Pojedynczy wątek)...")
     for m in modes:
         m_trials = _get_mode_trials(m, total_trials)
         mode_scrambles = scrambles[:m_trials]
         mode_start = time.perf_counter()
 
-        # Wyświetlenie stanu 0/N od razu w momencie startu danego algorytmu
         print_progress_bar(m, 0, m_trials, 0.0)
 
         for idx, scramble in enumerate(mode_scrambles, 1):
@@ -183,7 +270,6 @@ def run_pass1_time_moves_cpu(scrambles, modes):
                 "cpu_usage": cpu_usage
             })
 
-            # Odświeżenie paska postępu już po zatrzymaniu stopera dla danej kostki
             print_progress_bar(m, idx, m_trials, time.perf_counter() - mode_start)
 
         sys.stdout.write("\n")
@@ -193,14 +279,10 @@ def run_pass1_time_moves_cpu(scrambles, modes):
 
 
 def run_pass2_memory(scrambles, modes):
-    """
-    PRZEBIEG 2: Wyłącznie pomiar szczytowego zużycia pamięci RAM (Memory Used MB)
-    z paskiem postępu aktualizowanym poza pomiarem pamięci.
-    """
     total_trials = len(scrambles)
     pass2_results = {m: [] for m in modes}
 
-    print("\n[PRZEBIEG 2/2] Pomiar PAMIĘCI RAM...")
+    print("\n[PRZEBIEG 2/4] SC Pomiar PAMIĘCI RAM (Pojedynczy wątek)...")
     tracemalloc.start()
     try:
         for m in modes:
@@ -226,7 +308,6 @@ def run_pass2_memory(scrambles, modes):
                     "memory_mb": peak_bytes / (1024.0 * 1024.0)
                 })
 
-                # Aktualizacja paska po pobraniu peak_bytes (nie zaburza kolejnego reset_peak)
                 print_progress_bar(m, idx, m_trials, time.perf_counter() - mode_start)
 
             sys.stdout.write("\n")
@@ -237,25 +318,83 @@ def run_pass2_memory(scrambles, modes):
     return pass2_results
 
 
-def run_comparison_test(trials):
-    print(f"\nGenerowanie {trials} losowych scrambli do pliku '{SCRAMBLES_FILE}'...")
+# =========================================================================
+# PRZEBIEGI 3 i 4: MULTI-CORE (MULTIPROCESSING)
+# =========================================================================
+def run_pass3_multiprocess_cpu(scrambles, modes):
+    total_trials = len(scrambles)
+    pass3_results = {m: [] for m in modes}
+    workers = max(1, os.cpu_count() - 1)
+
+    print(f"\n[PRZEBIEG 3/4] MC Pomiar CZASU, RUCHÓW i CPU ({workers} workery)...")
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for m in modes:
+            m_trials = _get_mode_trials(m, total_trials)
+            mode_scrambles = scrambles[:m_trials]
+            mode_start = time.perf_counter()
+            
+            print_progress_bar(m, 0, m_trials, 0.0)
+            
+            args = [(s, m) for s in mode_scrambles]
+            for idx, result in enumerate(executor.map(_worker_pass3_cpu, args), 1):
+                pass3_results[m].append(result)
+                print_progress_bar(m, idx, m_trials, time.perf_counter() - mode_start)
+            
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            
+    return pass3_results
+
+
+def run_pass4_multiprocess_memory(scrambles, modes):
+    total_trials = len(scrambles)
+    pass4_results = {m: [] for m in modes}
+    workers = max(1, os.cpu_count() - 1)
+
+    print(f"\n[PRZEBIEG 4/4] MC Pomiar PAMIĘCI RAM ({workers} workery)...")
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for m in modes:
+            m_trials = _get_mode_trials(m, total_trials)
+            mode_scrambles = scrambles[:m_trials]
+            mode_start = time.perf_counter()
+            
+            print_progress_bar(m, 0, m_trials, 0.0)
+            
+            args = [(s, m) for s in mode_scrambles]
+            for idx, result in enumerate(executor.map(_worker_pass4_memory, args), 1):
+                pass4_results[m].append(result)
+                print_progress_bar(m, idx, m_trials, time.perf_counter() - mode_start)
+            
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            
+    return pass4_results
+
+
+def run_comparison_test(trials, modes):
+    start_time_dt = datetime.now()
+    start_time_perf = time.perf_counter()
+    print(f"\n[{start_time_dt.strftime('%Y-%m-%d %H:%M:%S')}] ROZPOCZĘTO TESTOWANIE.")
+    
+    print(f"Generowanie {trials} losowych scrambli do pliku '{SCRAMBLES_FILE}'...")
     save_scrambles_to_file(trials, SCRAMBLES_FILE)
     scrambles = load_scrambles_from_file(SCRAMBLES_FILE)
 
-    modes = ("LBL", "BLIND", "CFOP", "OPTIMAL")
+    all_possible_modes = ("LBL", "BLIND", "CFOP", "OPTIMAL")
     csv_prefix = {"LBL": "LBL", "BLIND": "Blind", "CFOP": "CFOP", "OPTIMAL": "Optimal"}
 
+    # 4 Niezależne Przebiegi
     pass1 = run_pass1_time_moves_cpu(scrambles, modes)
     pass2 = run_pass2_memory(scrambles, modes)
+    pass3 = run_pass3_multiprocess_cpu(scrambles, modes)
+    pass4 = run_pass4_multiprocess_memory(scrambles, modes)
 
     stats = {
         m: {
             "trials": _get_mode_trials(m, trials),
-            "successes": 0,
-            "time_ms": [],
-            "moves": [],
-            "cpu": [],
-            "mem": []
+            "successes_sc": 0, "successes_mc": 0,
+            "time_ms_sc": [], "moves_sc": [], "cpu_sc": [], "mem_sc": [],
+            "time_ms_mc": [], "moves_mc": [], "cpu_mc": [], "mem_mc": []
         }
         for m in modes
     }
@@ -263,28 +402,45 @@ def run_comparison_test(trials):
 
     for i in range(trials):
         row_data = {"Index": i + 1}
-        for m in modes:
+        for m in all_possible_modes:
             prefix = csv_prefix[m]
-            if i < len(pass1[m]):
-                p1 = pass1[m][i]
-                p2 = pass2[m][i]
+            if m in modes and i < len(pass1[m]):
+                p1, p2, p3, p4 = pass1[m][i], pass2[m][i], pass3[m][i], pass4[m][i]
 
                 if p1["solved"]:
-                    stats[m]["successes"] += 1
-                    stats[m]["time_ms"].append(p1["time_ms"])
-                    stats[m]["moves"].append(p1["moves"])
-                    stats[m]["cpu"].append(p1["cpu_usage"])
-                    stats[m]["mem"].append(p2["memory_mb"])
+                    stats[m]["successes_sc"] += 1
+                    stats[m]["time_ms_sc"].append(p1["time_ms"])
+                    stats[m]["moves_sc"].append(p1["moves"])
+                    stats[m]["cpu_sc"].append(p1["cpu_usage"])
+                    stats[m]["mem_sc"].append(p2["memory_mb"])
+                
+                if p3["solved"]:
+                    stats[m]["successes_mc"] += 1
+                    stats[m]["time_ms_mc"].append(p3["time_ms"])
+                    stats[m]["moves_mc"].append(p3["moves"])
+                    stats[m]["cpu_mc"].append(p3["cpu_usage"])
+                    stats[m]["mem_mc"].append(p4["memory_mb"])
 
-                row_data[f"{prefix} Time (ms)"] = f"{p1['time_ms']:.4f}"
-                row_data[f"{prefix} Moves"] = p1["moves"]
-                row_data[f"{prefix} CPU Usage"] = f"{p1['cpu_usage']:.2f}"
-                row_data[f"{prefix} Memory Used (MB)"] = f"{p2['memory_mb']:.6f}"
+                # SC Columns
+                row_data[f"{prefix} SC Time (ms)"] = f"{p1['time_ms']:.4f}"
+                row_data[f"{prefix} SC Moves"] = p1["moves"]
+                row_data[f"{prefix} SC CPU Usage"] = f"{p1['cpu_usage']:.2f}"
+                row_data[f"{prefix} SC Mem (MB)"] = f"{p2['memory_mb']:.6f}"
+                
+                # MC Columns
+                row_data[f"{prefix} MC Time (ms)"] = f"{p3['time_ms']:.4f}"
+                row_data[f"{prefix} MC Moves"] = p3["moves"]
+                row_data[f"{prefix} MC CPU Usage"] = f"{p3['cpu_usage']:.2f}"
+                row_data[f"{prefix} MC Mem (MB)"] = f"{p4['memory_mb']:.6f}"
             else:
-                row_data[f"{prefix} Time (ms)"] = ""
-                row_data[f"{prefix} Moves"] = ""
-                row_data[f"{prefix} CPU Usage"] = ""
-                row_data[f"{prefix} Memory Used (MB)"] = ""
+                row_data[f"{prefix} SC Time (ms)"] = ""
+                row_data[f"{prefix} SC Moves"] = ""
+                row_data[f"{prefix} SC CPU Usage"] = ""
+                row_data[f"{prefix} SC Mem (MB)"] = ""
+                row_data[f"{prefix} MC Time (ms)"] = ""
+                row_data[f"{prefix} MC Moves"] = ""
+                row_data[f"{prefix} MC CPU Usage"] = ""
+                row_data[f"{prefix} MC Mem (MB)"] = ""
 
         csv_rows.append(row_data)
 
@@ -296,26 +452,114 @@ def run_comparison_test(trials):
     print(f"\nZapisano pełne dane ({len(csv_rows)} wierszy) w pliku '{CSV_OUTPUT_FILE}'.")
 
     print("\n" + "=" * 90)
-    print(f"                 PODSUMOWANIE BENCHMARKU ({trials} SCRAMBLI, OPTIMAL: 10%)")
+    print(f"                PODSUMOWANIE BENCHMARKU ({trials} SCRAMBLI, OPTIMAL: 10%)")
     print("=" * 90)
     print(
-        f"{'Algorytm':<10} | {'Sukcesy':<12} | {'Śr. Czas [ms]':<14} | "
-        f"{'Śr. Ruchy':<12} | {'Śr. CPU [%]':<12} | {'Śr. Pamięć [MB]':<15}"
+        f"{'Algorytm':<10} | {'Tryb':<5} | {'Sukcesy':<10} | {'Śr. Czas [ms]':<13} | "
+        f"{'Śr. Ruchy':<10} | {'Śr. CPU [%]':<11} | {'Śr. Pamięć [MB]':<15}"
     )
     print("-" * 90)
     for m in modes:
         s = stats[m]
-        cnt = len(s["moves"])
-        avg_time = sum(s["time_ms"]) / cnt if cnt else 0.0
-        avg_moves = sum(s["moves"]) / cnt if cnt else 0.0
-        avg_cpu = sum(s["cpu"]) / cnt if cnt else 0.0
-        avg_mem = sum(s["mem"]) / cnt if cnt else 0.0
-        succ_str = f"{s['successes']}/{s['trials']}"
+        
+        # Single-Core obliczenia
+        cnt_sc = len(s["moves_sc"])
+        avg_time_sc = sum(s["time_ms_sc"]) / cnt_sc if cnt_sc else 0.0
+        avg_moves_sc = sum(s["moves_sc"]) / cnt_sc if cnt_sc else 0.0
+        avg_cpu_sc = sum(s["cpu_sc"]) / cnt_sc if cnt_sc else 0.0
+        avg_mem_sc = sum(s["mem_sc"]) / cnt_sc if cnt_sc else 0.0
+        succ_str_sc = f"{s['successes_sc']}/{s['trials']}"
+        
+        # Multi-Core obliczenia
+        cnt_mc = len(s["moves_mc"])
+        avg_time_mc = sum(s["time_ms_mc"]) / cnt_mc if cnt_mc else 0.0
+        avg_moves_mc = sum(s["moves_mc"]) / cnt_mc if cnt_mc else 0.0
+        avg_cpu_mc = sum(s["cpu_mc"]) / cnt_mc if cnt_mc else 0.0
+        avg_mem_mc = sum(s["mem_mc"]) / cnt_mc if cnt_mc else 0.0
+        succ_str_mc = f"{s['successes_mc']}/{s['trials']}"
+
         print(
-            f"{m:<10} | {succ_str:<12} | {avg_time:<14.4f} | "
-            f"{avg_moves:<12.2f} | {avg_cpu:<12.2f} | {avg_mem:<15.6f}"
+            f"{m:<10} | {'SC':<5} | {succ_str_sc:<10} | {avg_time_sc:<13.4f} | "
+            f"{avg_moves_sc:<10.2f} | {avg_cpu_sc:<11.2f} | {avg_mem_sc:<15.6f}"
+        )
+        print(
+            f"{m:<10} | {'MC':<5} | {succ_str_mc:<10} | {avg_time_mc:<13.4f} | "
+            f"{avg_moves_mc:<10.2f} | {avg_cpu_mc:<11.2f} | {avg_mem_mc:<15.6f}"
         )
     print("=" * 90)
+
+    end_time_dt = datetime.now()
+    total_time_s = time.perf_counter() - start_time_perf
+    mins, secs = divmod(total_time_s, 60)
+    
+    print(f"[{end_time_dt.strftime('%Y-%m-%d %H:%M:%S')}] ZAKOŃCZONO TESTOWANIE.")
+    print(f"CAŁKOWITY CZAS TRWANIA (4 PRZEBIEGI): {int(mins)} minut {secs:.2f} sekund")
+    print("=" * 90)
+
+
+def run_debug_test(trials, modes):
+    """
+    Tryb DEBUG: Generuje po jednym scramblu naraz. Najpierw wypisuje
+    w terminalu wygenerowany układ, a potem wywołuje solvery. 
+    W przypadku nieskończonej pętli, terminal jednoznacznie wskaże ostatni scramble.
+    """
+    start_time_dt = datetime.now()
+    print(f"\n[{start_time_dt.strftime('%Y-%m-%d %H:%M:%S')}] ROZPOCZĘTO DEBUGOWANIE ({trials} SCRAMBLI).")
+    print(f"Wybrane algorytmy: {', '.join(modes)}")
+
+    for i in range(1, trials + 1):
+        scramble = generate_random_scramble(20)
+        print(f"\n--- [Ułożenie {i}/{trials}] ---")
+        print(f"Oto Scramble: {scramble}")
+        
+        for m in modes:
+            print(f"  -> Uruchamiam {m:<7} ... ", end="", flush=True)
+            
+            cube = BitCube()
+            for move in parse_moves(scramble):
+                cube.apply_move(move)
+
+            t0 = time.perf_counter()
+            try:
+                moves_count = _execute_solver(m, cube, is_debug=True)
+                dt_ms = (time.perf_counter() - t0) * 1000.0
+                solved_str = "SUKCES" if is_cube_solved(cube) else "NIEUŁOŻONA"
+                print(f"\n    === ZAKOŃCZONO ALGORYTM [{solved_str}] (czas całkowity: {dt_ms:.2f} ms, ruchy: {moves_count}) ===")
+            except Exception as e:
+                print(f"\n    === BŁĄD ZGŁOSZONY PRZEZ SOLVER: {e} ===")
+
+    print("\n=======================================================")
+    print("[DEBUG] PROCEDURA DEBUGOWANIA ZOSTAŁA ZAKOŃCZONA.")
+    print("=======================================================")
+
+
+def ask_modes():
+    print("\nKtóre algorytmy chcesz uwzględnić?")
+    print(" 1 - LBL")
+    print(" 2 - CFOP")
+    print(" 3 - BLIND")
+    print(" 4 - OPTIMAL")
+    print(" 5 - ALL (wszystkie)")
+    print("Możesz wybrać kilka rozdzielając je spacją, np. '1 2'.")
+    choice = input("Wybór [5]: ").strip()
+    
+    if not choice:
+        choice = "5"
+        
+    modes = []
+    if "5" in choice.split() or choice.upper() == "ALL":
+        return ["LBL", "CFOP", "BLIND", "OPTIMAL"]
+        
+    mapping = {"1": "LBL", "2": "CFOP", "3": "BLIND", "4": "OPTIMAL"}
+    for c in choice.split():
+        if c in mapping and mapping[c] not in modes:
+            modes.append(mapping[c])
+            
+    if not modes:
+        print("Nie wybrano prawidłowych algorytmów. Domyślnie ładuję ALL.")
+        return ["LBL", "CFOP", "BLIND", "OPTIMAL"]
+        
+    return modes
 
 
 def ask_test_count():
@@ -340,6 +584,8 @@ def parse_command(cmd):
         return False, "QUIT", ""
     if cmd_upper == "TEST":
         return False, "TEST", ""
+    if cmd_upper == "DEBUG":
+        return False, "DEBUG", ""
     if cmd_upper in {"V", "VIS", "TOGGLE"}:
         return False, "TOGGLE_VIS", ""
     if cmd_upper in {"ON", "V ON", "VIS ON"}:
@@ -397,9 +643,9 @@ def main():
         plt.pause(0.05)
 
     print("=" * 80)
-    print("               SYMULATOR I BENCHMARK KOSTKI RUBIKA (BITBOARD)")
+    print("              SYMULATOR I BENCHMARK KOSTKI RUBIKA (BITBOARD)")
     print("=" * 80)
-    print("Komendy: S, LBL, CFOP, BLIND, OPT (Double Search), V/ON/OFF, TEST, Q")
+    print("Komendy: S, LBL, CFOP, BLIND, OPT (Double Search), V/ON/OFF, TEST, DEBUG, Q")
     print(f"Aktualny stan wizualizatora: {'ON' if vis_enabled else 'OFF'}")
 
     while True:
@@ -427,14 +673,19 @@ def main():
             set_visualizer_state(False)
             continue
 
-        if mode == "TEST":
+        if mode in {"TEST", "DEBUG"}:
+            selected_modes = ask_modes()
             test_count = ask_test_count()
-            if test_count is not None:
-                run_comparison_test(test_count)
+            
+            if test_count is not None and selected_modes:
+                if mode == "TEST":
+                    run_comparison_test(test_count, selected_modes)
+                elif mode == "DEBUG":
+                    run_debug_test(test_count, selected_modes)
             continue
 
         if error:
-            print(f"Nieznana komenda: {error}. Dostępne: S, LBL, CFOP, BLIND, OPT, V, ON, OFF, TEST, Q")
+            print(f"Nieznana komenda: {error}. Dostępne: S, LBL, CFOP, BLIND, OPT, V, ON, OFF, TEST, DEBUG, Q")
             continue
 
         if do_scramble:
@@ -487,4 +738,5 @@ def main():
 
 
 if __name__ == "__main__":
+    # Niezbędne zabezpieczenie pętli głównej dla bezbłędnego startowania multiprocessing na systemach Windows
     main()

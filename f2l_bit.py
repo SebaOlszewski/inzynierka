@@ -16,7 +16,7 @@ ROTATE_FACE_MAP = {
 }
 
 # =========================================================================
-# BAZA 41 KANONICZNYCH ALGORYTMÓW F2L DLA SLOTU FR (CORNER 5, EDGE 4)
+# BAZA KANONICZNYCH ALGORYTMÓW F2L DLA SLOTU FR (CORNER 5, EDGE 4)
 # =========================================================================
 F2L_FR_ALGS = [
     # 1-4: Podstawowe wstawienia (Basic Inserts)
@@ -73,6 +73,15 @@ F2L_FR_ALGS = [
     "R U' R' U R U2 R' U R U' R'",
     "R U R' U' R U' R' U2 F' U' F",
     "R U2 R' U' R U R' U' R U' R'",
+
+    # --- DODANE BRAKUJĄCE PRZYPADKI (CORNER SOLVED, EDGE FLIPPED ITP) ---
+    "R U R' U' R U2 R' U' R U R'",   # Narożnik ułożony, krawędź odwrócona
+    "R U' R' U F' U' F U' R U R'",   # Alternatywa dla narożnik ułożony, krawędź odwrócona
+    "R U2 R' U R U2 R' U F' U' F",   # Krawędź ułożona, narożnik źle zorientowany 1
+    "F' U2 F U' F' U2 F U' R U R'",  # Krawędź ułożona, narożnik źle zorientowany 2
+    "R U' R' U F' U2 F U F' U2 F",   # Narożnik i krawędź w slocie, całkowicie źle ułożone 1
+    "F' U' F U R U' R' U2 R U' R'",  # Narożnik i krawędź w slocie, całkowicie źle ułożone 2
+    "R U' R' U' R U' R' U F' U' F",  # Dodatkowe rozdzielenie dla rzadkiego przypadku
 ]
 
 
@@ -179,43 +188,49 @@ def _apply_seq(cube, seq, log):
 
 
 def solve_f2l_pair(cube, slot_id, log):
-    """Układa pojedynczą parę F2L używając 10-bitowej tablicy haszującej."""
+    """Układa pojedynczą parę F2L używając 10-bitowej tablicy haszującej z dynamicznym rozbijaniem par."""
     _, c_idx, e_idx, c_eject, _ = F2L_SLOTS[slot_id]
     solved_key = (c_idx << 7) | (0 << 5) | (e_idx << 1) | 0
 
-    for _ in range(4):
+    # Zwiększamy bufor do 12 prób ze względu na nowe, asymetryczne manewry awaryjne
+    for attempt in range(12):
         key = get_f2l_pair_key(cube, c_idx, e_idx)
         if key == solved_key:
             return
 
-        # 1. Jeśli para jest w warstwie U lub we własnym slocie -> O(1) lookup!
+        # 1. Idealne dopasowanie z tablicy
         if key in F2L_LOOKUP[slot_id]:
             _apply_seq(cube, F2L_LOOKUP[slot_id][key], log)
             return
 
-        # 2. Jeśli narożnik lub krawędź utknęły w INNYM slocie F2L -> wypchnij na warstwę U
         c_slot = (key >> 7) & 0x07
         e_slot = (key >> 1) & 0x0F
 
+        # 2. Wypychanie z obcych slotów narożników
         if c_slot in (4, 5, 6, 7) and c_slot != c_idx:
-            # Znajdź wypychacz dla obcego slotu narożnika
             for _, other_c, _, other_c_eject, _ in F2L_SLOTS:
                 if other_c == c_slot:
                     _apply_seq(cube, other_c_eject, log)
                     break
             continue
 
+        # 2. Wypychanie z obcych slotów krawędzi
         if e_slot in (4, 5, 6, 7) and e_slot != e_idx:
-            # Krawędź jest w obcym slocie środkowym -> wypchnij ją 3 ruchami (np. R U R')
             for _, _, other_e, other_c_eject, _ in F2L_SLOTS:
                 if other_e == e_slot:
                     _apply_seq(cube, other_c_eject, log)
                     break
             continue
 
-        # 3. Jeśli oba są we własnym slocie w rzadkiej konfiguracji, wypchnij na górę
+        # 3. MŁOTEK NA PĘTLE: Elementy utknęły w U lub we własnym slocie.
+        # W co drugiej próbie celowo obracamy warstwę U przed wypchnięciem, 
+        # co gwarantuje rozbicie źle połączonych par.
+        if attempt % 2 == 1:
+            _apply_seq(cube, "U", log)
+            
         _apply_seq(cube, c_eject, log)
 
+    raise RuntimeError(f"F2L poddał się na slocie {slot_id}. Brakuje algorytmu w tablicy.")
 
 def solve_full_f2l(cube, log):
     """Układa wszystkie 4 pary F2L (FR, FL, BL, BR) bezpośrednio z tablic bitowych."""

@@ -6,43 +6,75 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
 
 CSV_FILE = "solve_data.csv"
 RESULTS_DIR = "results"
 STANDARD_DIR = os.path.join(RESULTS_DIR, "results_standard")
 LOG_DIR = os.path.join(RESULTS_DIR, "results_log")
 
-COLORS = ["#2b5c8f", "#d95f02", "#2ca02c", "#8c564b"]  # LBL, BLIND, CFOP, OPTIMAL
-ALGORITHMS = ["LBL", "BLIND", "CFOP", "OPTIMAL"]
+# Zaktualizowane kolory: para SC (jaśniejszy) / MC (ciemniejszy) dla każdego z 4 algorytmów
+COLORS = [
+    "#4a83c4", "#1f4e79",  # LBL SC/MC (Niebieskie)
+    "#ff8c42", "#a64b00",  # BLIND SC/MC (Pomarańczowe)
+    "#4db84d", "#1e731e",  # CFOP SC/MC (Zielone)
+    "#b57365", "#5c3228"   # OPTIMAL SC/MC (Brązowe)
+]
+
+ALGORITHMS = [
+    "LBL (SC)", "LBL (MC)",
+    "BLIND (SC)", "BLIND (MC)",
+    "CFOP (SC)", "CFOP (MC)",
+    "OPTIMAL (SC)", "OPTIMAL (MC)"
+]
 
 METRICS = [
     {
         "title": "Średni czas ułożenia kostki",
-        "ylabel": "Czas [ms]",
-        "cols": ["LBL Time (ms)", "Blind Time (ms)", "CFOP Time (ms)", "Optimal Time (ms)"],
-        "fmt": "{:.2f} ms",
+        "ylabel": "Czas [ms / min dla Optimal]",
+        "cols": [
+            "LBL SC Time (ms)", "LBL MC Time (ms)",
+            "Blind SC Time (ms)", "Blind MC Time (ms)",
+            "CFOP SC Time (ms)", "CFOP MC Time (ms)",
+            "Optimal SC Time (min)", "Optimal MC Time (min)"
+        ],
+        # Funkcja formatująca dobierająca jednostkę w zależności od algorytmu
+        "fmt_func": lambda val, alg_name: f"{val:.2f} min" if "OPTIMAL" in alg_name else f"{val:.2f} ms",
         "log_capable": True
     },
     {
         "title": "Średnia liczba wykonanych ruchów",
         "ylabel": "Liczba ruchów (HTM)",
-        "cols": ["LBL Moves", "Blind Moves", "CFOP Moves", "Optimal Moves"],
-        "fmt": "{:.1f}",
+        "cols": [
+            "LBL SC Moves", "LBL MC Moves",
+            "Blind SC Moves", "Blind MC Moves",
+            "CFOP SC Moves", "CFOP MC Moves",
+            "Optimal SC Moves", "Optimal MC Moves"
+        ],
+        "fmt_func": lambda val, alg_name: f"{val:.1f}",
         "log_capable": True
     },
     {
         "title": "Średnie wykorzystanie procesora (CPU)",
         "ylabel": "Obciążenie CPU [%]",
-        "cols": ["LBL CPU Usage", "Blind CPU Usage", "CFOP CPU Usage", "Optimal CPU Usage"],
-        "fmt": "{:.1f}%",
+        "cols": [
+            "LBL SC CPU Usage", "LBL MC CPU Usage",
+            "Blind SC CPU Usage", "Blind MC CPU Usage",
+            "CFOP SC CPU Usage", "CFOP MC CPU Usage",
+            "Optimal SC CPU Usage", "Optimal MC CPU Usage"
+        ],
+        "fmt_func": lambda val, alg_name: f"{val:.1f}%",
         "log_capable": False
     },
     {
         "title": "Szczytowe zużycie pamięci RAM",
         "ylabel": "Pamięć [MB]",
-        "cols": ["LBL Memory Used (MB)", "Blind Memory Used (MB)", "CFOP Memory Used (MB)", "Optimal Memory Used (MB)"],
-        "fmt": "{:.3f} MB",
+        "cols": [
+            "LBL SC Mem (MB)", "LBL MC Mem (MB)",
+            "Blind SC Mem (MB)", "Blind MC Mem (MB)",
+            "CFOP SC Mem (MB)", "CFOP MC Mem (MB)",
+            "Optimal SC Mem (MB)", "Optimal MC Mem (MB)"
+        ],
+        "fmt_func": lambda val, alg_name: f"{val:.3f} MB",
         "log_capable": True
     }
 ]
@@ -77,50 +109,50 @@ def prepare_results_directories():
 
 def print_thesis_summary_table(df):
     """Wypisuje w konsoli tabelę statystyczną (N, Średnia, Odch. std., Mediana, Min, Max)."""
-    print("\n" + "=" * 102)
-    print("                   STATYSTYKI OPISOWE DO TABELI W PRACY MAGISTERSKIEJ")
-    print("=" * 102)
-    print(f"{'Parametr':<32} | {'N':<5} | {'Średnia':<10} | {'Odch. std':<10} | {'Mediana':<10} | {'Min':<10} | {'Max':<10}")
-    print("-" * 102)
+    print("\n" + "=" * 105)
+    print("                    STATYSTYKI OPISOWE DO TABELI W PRACY MAGISTERSKIEJ")
+    print("=" * 105)
+    print(f"{'Parametr':<35} | {'N':<5} | {'Średnia':<10} | {'Odch. std':<10} | {'Mediana':<10} | {'Min':<10} | {'Max':<10}")
+    print("-" * 105)
 
     for m in METRICS:
         for alg, col in zip(ALGORITHMS, m["cols"]):
             series = df[col].dropna()
             n_count = len(series)
             std_val = series.std() if n_count > 1 else 0.0
-            label = f"{alg} - {m['ylabel']}"
+            label = f"{alg} {m['ylabel']}"
             print(
-                f"{label:<32} | {n_count:<5} | {series.mean():<10.3f} | {std_val:<10.3f} | "
+                f"{label:<35} | {n_count:<5} | {series.mean():<10.3f} | {std_val:<10.3f} | "
                 f"{series.median():<10.3f} | {series.min():<10.3f} | {series.max():<10.3f}"
             )
-        print("-" * 102)
+        print("-" * 105)
 
 
 def plot_bar_averages(df, out_dir, use_log=False):
-    """Generuje siatkę 2x2 wykresów słupkowych (w skali standardowej lub logarytmicznej)."""
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9), dpi=300)
+    """Generuje osobne wykresy słupkowe (w skali standardowej lub logarytmicznej)."""
     n_total = len(df)
-    n_opt = len(df["Optimal Moves"].dropna())
+    n_opt = len(df["Optimal SC Moves"].dropna())
     scale_label = "SKALA LOGARYTMICZNA" if use_log else "SKALA LINIOWA"
-    fig.suptitle(
-        f"Porównanie średnich wyników LBL, BLIND, CFOP (n={n_total}) oraz OPTIMAL (n={n_opt}) [{scale_label}]",
-        fontsize=12.5, fontweight="bold", y=0.98
-    )
 
-    for ax, m in zip(axes.flat, METRICS):
+    for i, m in enumerate(METRICS):
+        fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
+        
         means = [df[c].dropna().mean() for c in m["cols"]]
         is_log_axis = use_log and m["log_capable"]
 
         bars = ax.bar(
             ALGORITHMS, means,
-            color=COLORS, edgecolor="black", linewidth=1.0, alpha=0.88, width=0.55
+            color=COLORS, edgecolor="black", linewidth=1.0, alpha=0.88, width=0.6
         )
 
         title_suffix = " (skala log)" if is_log_axis else ""
-        ax.set_title(m["title"] + title_suffix, fontsize=12, fontweight="bold", pad=10)
+        full_title = f"{m['title']}{title_suffix}\n(LBL, BLIND, CFOP: n={n_total} | OPTIMAL: n={n_opt}) [{scale_label}]"
+        
+        ax.set_title(full_title, fontsize=12, fontweight="bold", pad=10)
         ax.set_ylabel(m["ylabel"], fontsize=10)
         ax.grid(axis="y", which="both" if is_log_axis else "major", linestyle="--", alpha=0.5)
         ax.set_axisbelow(True)
+        ax.tick_params(axis='x', rotation=45, labelsize=9)
 
         if is_log_axis:
             ax.set_yscale("log")
@@ -129,44 +161,43 @@ def plot_bar_averages(df, out_dir, use_log=False):
             max_v = max(positive_means) if positive_means else 1.0
             ax.set_ylim(min_v * 0.35, max_v * 4.5)
 
-            for bar, mu in zip(bars, means):
+            for bar, mu, alg_name in zip(bars, means, ALGORITHMS):
                 if mu > 0:
                     ax.text(
                         bar.get_x() + bar.get_width() / 2.0, mu * 1.22,
-                        m["fmt"].format(mu),
-                        ha="center", va="bottom", fontsize=9, fontweight="bold"
+                        m["fmt_func"](mu, alg_name),
+                        ha="center", va="bottom", fontsize=8, fontweight="bold", rotation=90
                     )
         else:
             max_height = max(means + [1e-6])
-            ax.set_ylim(0, max_height * 1.18)
+            ax.set_ylim(0, max_height * 1.25)
 
-            for bar, mu in zip(bars, means):
-                y_pos = mu + (max_height * 0.02)
+            for bar, mu, alg_name in zip(bars, means, ALGORITHMS):
+                y_pos = mu + (max_height * 0.03)
                 ax.text(
                     bar.get_x() + bar.get_width() / 2.0, y_pos,
-                    m["fmt"].format(mu),
-                    ha="center", va="bottom", fontsize=9, fontweight="bold"
+                    m["fmt_func"](mu, alg_name),
+                    ha="center", va="bottom", fontsize=8, fontweight="bold", rotation=90
                 )
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    out_path = os.path.join(out_dir, "wykres_1_srednie_slupkowy.png")
-    plt.savefig(out_path, dpi=300)
-    plt.close(fig)
-    print(f"[ZAPISANO] {out_path}")
+        plt.tight_layout()
+        
+        safe_name = m["title"].replace(" ", "_").replace("(", "").replace(")", "").lower()
+        out_path = os.path.join(out_dir, f"wykres_slupkowy_{i+1}_{safe_name}.png")
+        plt.savefig(out_path, dpi=300)
+        plt.close(fig)
+        print(f"[ZAPISANO] {out_path}")
 
 
 def plot_boxplots(df, out_dir, use_log=False):
-    """Generuje siatkę 2x2 wykresów pudełkowych (w skali standardowej lub logarytmicznej)."""
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9), dpi=300)
+    """Generuje osobne wykresy pudełkowe (w skali standardowej lub logarytmicznej)."""
     n_total = len(df)
-    n_opt = len(df["Optimal Moves"].dropna())
+    n_opt = len(df["Optimal SC Moves"].dropna())
     scale_label = "SKALA LOGARYTMICZNA" if use_log else "SKALA LINIOWA"
-    fig.suptitle(
-        f"Rozkład parametrów układania kostki (Boxplot, n={n_total}, OPTIMAL n={n_opt}) [{scale_label}]",
-        fontsize=12.5, fontweight="bold", y=0.98
-    )
 
-    for ax, m in zip(axes.flat, METRICS):
+    for i, m in enumerate(METRICS):
+        fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
+        
         is_log_axis = use_log and m["log_capable"]
         data = []
         for c in m["cols"]:
@@ -176,9 +207,9 @@ def plot_boxplots(df, out_dir, use_log=False):
             data.append(vals)
 
         bp = ax.boxplot(
-            data, tick_labels=ALGORITHMS, patch_artist=True, widths=0.45,
+            data, tick_labels=ALGORITHMS, patch_artist=True, widths=0.5,
             medianprops=dict(color="black", linewidth=2.0),
-            flierprops=dict(marker="o", markerfacecolor="red", markersize=5, alpha=0.6)
+            flierprops=dict(marker="o", markerfacecolor="red", markersize=4, alpha=0.5)
         )
         for patch, color in zip(bp["boxes"], COLORS):
             patch.set_facecolor(color)
@@ -191,8 +222,11 @@ def plot_boxplots(df, out_dir, use_log=False):
             .replace("Średnia ", "Rozkład: ")
         )
         title_suffix = " (skala log)" if is_log_axis else ""
-        ax.set_title(base_title + title_suffix, fontsize=12, fontweight="bold", pad=10)
+        full_title = f"{base_title}{title_suffix}\n(SC vs MC, n={n_total}, OPTIMAL n={n_opt}) [{scale_label}]"
+        
+        ax.set_title(full_title, fontsize=12, fontweight="bold", pad=10)
         ax.set_ylabel(m["ylabel"], fontsize=10)
+        ax.tick_params(axis='x', rotation=45, labelsize=9)
 
         if is_log_axis:
             ax.set_yscale("log")
@@ -200,63 +234,13 @@ def plot_boxplots(df, out_dir, use_log=False):
         ax.grid(axis="y", which="both" if is_log_axis else "major", linestyle="--", alpha=0.5)
         ax.set_axisbelow(True)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    out_path = os.path.join(out_dir, "wykres_2_rozklad_boxplot.png")
-    plt.savefig(out_path, dpi=300)
-    plt.close(fig)
-    print(f"[ZAPISANO] {out_path}")
-
-
-def plot_stability_over_trials(df, out_dir, use_log=False):
-    """Generuje wykres przebiegu liczby ruchów i czasu dla kolejnych scrambli."""
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), dpi=300, sharex=True)
-    scale_label = "SKALA LOGARYTMICZNA" if use_log else "SKALA LINIOWA"
-    fig.suptitle(
-        f"Stabilność algorytmów w kolejnych próbach testowych [{scale_label}]",
-        fontsize=13.5, fontweight="bold", y=0.98
-    )
-
-    move_cols = ["LBL Moves", "Blind Moves", "CFOP Moves", "Optimal Moves"]
-    time_cols = ["LBL Time (ms)", "Blind Time (ms)", "CFOP Time (ms)", "Optimal Time (ms)"]
-
-    for alg, col, color in zip(ALGORITHMS, move_cols, COLORS):
-        sub = df[["Index", col]].dropna()
-        ax1.plot(
-            sub["Index"], sub[col], marker="o", markersize=4,
-            linewidth=1.5, color=color, label=f"{alg} (śr. {sub[col].mean():.1f})"
-        )
-    ax1.set_title(
-        "Liczba wykonanych ruchów dla poszczególnych scrambli" + (" (skala log)" if use_log else ""),
-        fontsize=11, fontweight="bold"
-    )
-    ax1.set_ylabel("Liczba ruchów")
-    if use_log:
-        ax1.set_yscale("log")
-    ax1.grid(True, which="both" if use_log else "major", linestyle="--", alpha=0.5)
-    ax1.legend(loc="upper right")
-
-    for alg, col, color in zip(ALGORITHMS, time_cols, COLORS):
-        sub = df[["Index", col]].dropna()
-        ax2.plot(
-            sub["Index"], sub[col], marker="s", markersize=4,
-            linewidth=1.5, color=color, label=f"{alg} (śr. {sub[col].mean():.2f} ms)"
-        )
-    ax2.set_title(
-        "Czas ułożenia dla poszczególnych scrambli" + (" (skala log)" if use_log else ""),
-        fontsize=11, fontweight="bold"
-    )
-    ax2.set_xlabel("Numer próby (Index scrambla)")
-    ax2.set_ylabel("Czas [ms]")
-    if use_log:
-        ax2.set_yscale("log")
-    ax2.grid(True, which="both" if use_log else "major", linestyle="--", alpha=0.5)
-    ax2.legend(loc="upper right")
-
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    out_path = os.path.join(out_dir, "wykres_3_stabilnosc_scrambli.png")
-    plt.savefig(out_path, dpi=300)
-    plt.close(fig)
-    print(f"[ZAPISANO] {out_path}")
+        plt.tight_layout()
+        
+        safe_name = m["title"].replace(" ", "_").replace("(", "").replace(")", "").lower()
+        out_path = os.path.join(out_dir, f"wykres_boxplot_{i+1}_{safe_name}.png")
+        plt.savefig(out_path, dpi=300)
+        plt.close(fig)
+        print(f"[ZAPISANO] {out_path}")
 
 
 def main():
@@ -266,6 +250,15 @@ def main():
         return
 
     df = pd.read_csv(CSV_FILE)
+    
+    # Przeliczanie czasu Optimal z ms na minuty (1 minuta = 60 000 ms)
+    optimal_time_ms_cols = ["Optimal SC Time (ms)", "Optimal MC Time (ms)"]
+    optimal_time_min_cols = ["Optimal SC Time (min)", "Optimal MC Time (min)"]
+    
+    for col_ms, col_min in zip(optimal_time_ms_cols, optimal_time_min_cols):
+        if col_ms in df.columns:
+            df[col_min] = df[col_ms] / 60000.0
+
     if df.empty:
         print(f"Plik '{CSV_FILE}' jest pusty.")
         wait_for_exit()
@@ -277,14 +270,12 @@ def main():
     print("\n--- Generowanie wykresów: SKALA STANDARDOWA (LINIOWA) ---")
     plot_bar_averages(df, STANDARD_DIR, use_log=False)
     plot_boxplots(df, STANDARD_DIR, use_log=False)
-    plot_stability_over_trials(df, STANDARD_DIR, use_log=False)
 
     print("\n--- Generowanie wykresów: SKALA LOGARYTMICZNA ---")
     plot_bar_averages(df, LOG_DIR, use_log=True)
     plot_boxplots(df, LOG_DIR, use_log=True)
-    plot_stability_over_trials(df, LOG_DIR, use_log=True)
 
-    print(f"\nGotowe! Zapisano oba zestawy wykresów w:\n  1) {os.path.abspath(STANDARD_DIR)}\n  2) {os.path.abspath(LOG_DIR)}")
+    print(f"\nGotowe! Zapisano oba zestawy pojedynczych wykresów w:\n  1) {os.path.abspath(STANDARD_DIR)}\n  2) {os.path.abspath(LOG_DIR)}")
     wait_for_exit()
 
 
